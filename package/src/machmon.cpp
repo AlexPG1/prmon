@@ -26,9 +26,7 @@ machmon::machmon() : mach_stats{} {
 }
 
 // Read the first line of /proc/stat and return {utime, stime, ntime}
-// Layout of /proc/stat first line:
-//   cpu  user nice system idle iowait irq softirq ...
-//        [1]  [2]  [3]    [4]  ...
+
 static std::tuple<long, long, long> read_proc_stat(
     const std::string& read_path) {
   std::string stat_path = "/proc/stat";
