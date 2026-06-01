@@ -22,13 +22,16 @@
 class curlmon final : public Imonitor, public MessageBase {
  private:
   const prmon::parameter_list params = {
-      {"ipmi_dcmi_power_consumption_watts", "W",  "DCMI power consumption"},
-      {"ipmi_power_watts", "W",  "IPMI power consumption"},
-      {"node_hwmon_power_watt", "W", "HWMON power consumption"},
-      {"node_rapl_package_joules_total", "W",  "RAPL power consumption"},
+      {"dcmi", "W",  "DCMI power consumption"},
+      {"ipmi", "W",  "IPMI power consumption"},
+      {"hwmon", "W", "HWMON power consumption"},
+      {"rapl_1",  "J", "RAPL package 1 energy in joules"},
+      {"rapl_2",  "J", "RAPL package 2 energy in joules"}
   };
+  
+  bool connection_failed{false}; // To disable monitor if all ports fail
 
-  prmon::monitored_list curl_stats;  // era monitored_value_map
+  prmon::monitored_list curl_stats;
 
   const std::vector<std::string> metrics_urls{
       "http://localhost:9100/metrics",

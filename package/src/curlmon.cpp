@@ -80,31 +80,102 @@ double curlmon::parse_metric_line(const std::string& line,
   }
 }
 
-void curlmon::update_stats(const std::vector<pid_t>& /*pids*/,
-                              const std::string read_path) {
-    std::unordered_map<std::string, double> accumulated{};
-  for (const auto& param : params) accumulated[param.get_name()] = 0.0;
 
+void curlmon::update_stats(const std::vector<pid_t>& /*pids*/,
+                           const std::string /*read_path*/) {
+  // Collect matching lines from all URLs
+  std::vector<std::string> dcmi_lines{};
+  std::vector<std::string> rapl_lines{};
+  std::vector<std::string> ipmi_lines{};
+  std::vector<std::string> hwmon_lines{};
+
+  if (connection_failed) return;
+
+  int failed_urls = 0;
   for (const auto& url : metrics_urls) {
     try {
       const std::string body = fetch_metrics(url);
       std::istringstream stream{body};
       std::string line{};
-
       while (std::getline(stream, line)) {
-        for (const auto& param : params) {
-          double val = parse_metric_line(line, param.get_name());
-          if (val >= 0.0) accumulated[param.get_name()] += val;
-        }
+        std::string lower = line;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower.find("ipmi_dcmi_power_consumption_watts") != std::string::npos)
+          dcmi_lines.push_back(line);
+        if (lower.find("node_rapl_package_joules_total") != std::string::npos)
+          rapl_lines.push_back(line);
+        if (lower.find("ipmi_power_watts") != std::string::npos)
+          ipmi_lines.push_back(line);
+        if (lower.find("node_hwmon_power_watt") != std::string::npos)
+          hwmon_lines.push_back(line);
       }
-    } catch (const std::exception& e) {
-      error(std::string("Error fetching metrics from ") + url + ": " + e.what());
+    } catch (...) {
+      ++failed_urls;  // Silencioso: no se loga nada por URL individual
     }
   }
 
-  for (const auto& param : params) {
-    auto val = static_cast<prmon::mon_value>(accumulated[param.get_name()] * 1000.0);
-    curl_stats.at(param.get_name()).set_value(val);
+  if (failed_urls == (int)metrics_urls.size()) {
+    error("Cannot connect to any exporter endpoint, disabling curlmon");
+    connection_failed = true;
+    return;
+  }
+
+  // DCMI: sum all matching lines
+  double dcmi = 0.0;
+  try {
+    for (const auto& line : dcmi_lines) {
+      double val = parse_metric_line(line, "ipmi_dcmi_power_consumption_watts");
+      if (val >= 0.0) dcmi += val;
+    }
+  } catch (...) { dcmi = 0.0; }
+
+  // RAPL: penultimate line -> rapl_1, last line -> rapl_2
+  double rapl_1 = 0.0, rapl_2 = 0.0;
+  try {
+    if (rapl_lines.size() >= 2) {
+      double v1 = parse_metric_line(rapl_lines[rapl_lines.size() - 2],
+                                    "node_rapl_package_joules_total");
+      double v2 = parse_metric_line(rapl_lines[rapl_lines.size() - 1],
+                                    "node_rapl_package_joules_total");
+      if (v1 >= 0.0) rapl_1 = v1;
+      if (v2 >= 0.0) rapl_2 = v2;
+    } else if (rapl_lines.size() == 1) {
+      double v = parse_metric_line(rapl_lines[0], "node_rapl_package_joules_total");
+      if (v >= 0.0) rapl_1 = v;
+    }
+  } catch (...) { rapl_1 = rapl_2 = 0.0; }
+
+  // IPMI: last matching line
+  double ipmi = 0.0;
+  try {
+    if (!ipmi_lines.empty()) {
+      double val = parse_metric_line(ipmi_lines.back(), "ipmi_power_watts");
+      if (val >= 0.0) ipmi = val;
+    }
+  } catch (...) { ipmi = 0.0; }
+
+  // HWMON: last matching line
+  double hwmon = 0.0;
+  try {
+    if (!hwmon_lines.empty()) {
+      double val = parse_metric_line(hwmon_lines.back(), "node_hwmon_power_average_watt");
+      if (val >= 0.0) hwmon = val;
+    }
+  } catch (...) { hwmon = 0.0; }
+
+  try {
+    curl_stats.at("dcmi").set_value(
+        static_cast<prmon::mon_value>(dcmi));
+    curl_stats.at("rapl_1").set_value(
+        static_cast<prmon::mon_value>(rapl_1));
+    curl_stats.at("rapl_2").set_value(
+        static_cast<prmon::mon_value>(rapl_2));
+    curl_stats.at("ipmi").set_value(
+        static_cast<prmon::mon_value>(ipmi));
+    curl_stats.at("hwmon").set_value(
+        static_cast<prmon::mon_value>(hwmon));
+  } catch (const std::exception& e) {
+    error(std::string("Error storing metrics: ") + e.what());
   }
 }
 
